@@ -204,16 +204,14 @@
             </div>
 
             <button type="button" class="add-btn" id="add-item-btn">+ Добавить предмет</button>
+
+            <button type="submit" class="main-btn" id="submit-btn">Отправить отчёт</button>
         </form>
     </div>
 
     <script>
         const tg = window.Telegram.WebApp;
         tg.expand();
-
-        const mainButton = tg.MainButton;
-        mainButton.text = "Отправить";
-        mainButton.show();
 
         // Set default date to today
         document.getElementById('date').valueAsDate = new Date();
@@ -237,6 +235,10 @@
                         <label>Оценка (руб)</label>
                         <input type="number" class="item-eval" placeholder="Например: 1500" required>
                     </div>
+                    <div class="form-group">
+                        <label>Фото</label>
+                        <input type="file" class="item-photo" accept="image/*" required>
+                    </div>
                 </div>
             `;
         }
@@ -246,14 +248,12 @@
             div.innerHTML = createItemHTML(itemCount);
             itemsContainer.appendChild(div.firstElementChild);
             itemCount++;
-            validate();
         }
 
         function removeItem(id) {
             const item = document.getElementById(`item-${id}`);
             if (item) {
                 item.remove();
-                validate();
             }
         }
 
@@ -262,69 +262,65 @@
 
         document.getElementById('add-item-btn').addEventListener('click', addItem);
 
-        // Validation
-        const ticketInput = document.getElementById('ticket');
-        const ticketError = document.getElementById('ticket-error');
+        // Form Submission
+        document.getElementById('form').addEventListener('submit', async function (e) {
+            e.preventDefault();
 
-        function validate() {
-            const dept = document.getElementById('department').value;
-            const issue = document.getElementById('issue').value;
-            const ticket = ticketInput.value;
-            const date = document.getElementById('date').value;
-            const region = document.getElementById('region').value;
+            const submitBtn = document.getElementById('submit-btn');
+            submitBtn.disabled = true;
+            submitBtn.innerText = "Отправка...";
 
-            // Check items
-            const descs = document.querySelectorAll('.item-desc');
-            const evals = document.querySelectorAll('.item-eval');
-            let itemsValid = true;
+            try {
+                const formData = new FormData();
 
-            if (descs.length === 0) itemsValid = false;
+                // Basic Info
+                formData.append('department_number', document.getElementById('department').value);
+                formData.append('issue_number', document.getElementById('issue').value);
+                formData.append('ticket_number', document.getElementById('ticket').value);
+                formData.append('date', document.getElementById('date').value.split('-').reverse().join('.'));
+                formData.append('region', document.getElementById('region').value);
 
-            descs.forEach(el => { if (!el.value.trim()) itemsValid = false; });
-            evals.forEach(el => { if (!el.value.trim()) itemsValid = false; });
+                // Items & Photos
+                const items = [];
+                const itemCards = document.querySelectorAll('.item-card');
 
-            const isTicketValid = ticket.length === 11;
+                itemCards.forEach((card, index) => {
+                    items.push({
+                        id: index,
+                        description: card.querySelector('.item-desc').value,
+                        evaluation: card.querySelector('.item-eval').value
+                    });
 
-            if (!isTicketValid && ticket.length > 0) {
-                ticketError.style.display = 'block';
-            } else {
-                ticketError.style.display = 'none';
-            }
-
-            const isValid = dept && issue && isTicketValid && date && region && itemsValid;
-
-            if (isValid) {
-                mainButton.enable();
-            } else {
-                mainButton.disable();
-            }
-        }
-
-        document.getElementById('form').addEventListener('input', validate);
-        document.getElementById('region').addEventListener('change', validate);
-        // Listen to dynamic inputs
-        itemsContainer.addEventListener('input', validate);
-
-        Telegram.WebApp.onEvent('mainButtonClicked', function () {
-            const items = [];
-            const itemCards = document.querySelectorAll('.item-card');
-
-            itemCards.forEach(card => {
-                items.push({
-                    description: card.querySelector('.item-desc').value,
-                    evaluation: card.querySelector('.item-eval').value
+                    const fileInput = card.querySelector('.item-photo');
+                    if (fileInput.files[0]) {
+                        formData.append('photos', fileInput.files[0]);
+                    }
                 });
-            });
 
-            const data = {
-                department_number: document.getElementById('department').value,
-                issue_number: document.getElementById('issue').value,
-                ticket_number: document.getElementById('ticket').value,
-                date: document.getElementById('date').value.split('-').reverse().join('.'),
-                region: document.getElementById('region').value,
-                items: items
-            };
-            tg.sendData(JSON.stringify(data));
+                formData.append('items', JSON.stringify(items));
+
+                // Send to Backend
+                // Note: Relative path works because we will serve this from the same domain
+                const response = await fetch('/api/submit-report', {
+                    method: 'POST',
+                    body: formData
+                });
+
+                if (response.ok) {
+                    tg.showAlert("✅ Отчёт успешно отправлен!");
+                    tg.close();
+                } else {
+                    const error = await response.json();
+                    alert("Ошибка: " + (error.detail || "Неизвестная ошибка"));
+                    submitBtn.disabled = false;
+                    submitBtn.innerText = "Отправить отчёт";
+                }
+
+            } catch (err) {
+                alert("Ошибка сети: " + err.message);
+                submitBtn.disabled = false;
+                submitBtn.innerText = "Отправить отчёт";
+            }
         });
     </script>
 </body>

@@ -1,121 +1,166 @@
 import logging
+import uvicorn
+from contextlib import asynccontextmanager
+from fastapi import FastAPI, UploadFile, Form, File, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
+from typing import List, Optional
+import json
+from pathlib import Path
 import asyncio
-from telegram.ext import Application, CommandHandler, MessageHandler, filters, ConversationHandler
-from config.settings import settings
-from database.db import db
-from handlers.common import (
-    start_handler, cancel_handler, menu_handler, help_handler,
-    DEPARTMENT, ISSUE_NUMBER, TICKET_NUMBER, DATE, REGION, PHOTO, DESCRIPTION, EVALUATION,
-    MORE_PHOTO, CONFIRMATION, TESTING
-)
-from handlers.admin import (
-    help_admin_handler, add_admin_handler, history_handler, stats_handler, load_admin_ids
-)
-from handlers.reports import (
-    reports_start_handler, reports_action_handler, reports_month_input_handler,
-    reports_month_region_handler, reports_period_start_handler, reports_period_end_handler,
-    reports_period_region_handler, reports_cancel_handler,
-    REPORT_ACTION, REPORT_MONTH_INPUT, REPORT_MONTH_REGION,
-    REPORT_PERIOD_START, REPORT_PERIOD_END, REPORT_PERIOD_REGION
-)
-from handlers.conversation import (
-    get_department, get_issue_number, get_ticket_number, get_date, get_region,
-    photo_handler, description_handler, evaluation_handler, more_photo_handler,
-    confirmation_handler, test_choice_handler
-)
-from services.image import clean_temp_files
 
-# Logging setup
-logging.basicConfig(
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    level=logging.INFO
-)
+from bot_service import create_bot_app
+from database.db import db
+from config.settings import settings
+from services.document import create_document_from_data
+from services.excel import update_excel
+from services.archive import archive_document
+from services.image import compress_image, generate_unique_filename
+
+# Logging
+logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-async def post_shutdown(application: Application) -> None:
+# Global Bot Application
+bot_app = create_bot_app()
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # Startup
+    logger.info("Starting up...")
+    await db.connect()
+    await bot_app.initialize()
+    await bot_app.start()
+    await bot_app.updater.start_polling()
+    
+    yield
+    
+    # Shutdown
+    logger.info("Shutting down...")
+    await bot_app.updater.stop()
+    await bot_app.stop()
+    await bot_app.shutdown()
     await db.close()
 
-async def clean_temp_files_job(context):
-    await asyncio.to_thread(clean_temp_files, 3600)
+from fastapi.staticfiles import StaticFiles
 
-def main():
-    # Create directories
-    settings.TEMP_PHOTOS_DIR.mkdir(exist_ok=True)
-    settings.DOCS_DIR.mkdir(exist_ok=True)
-    settings.ARCHIVE_DIR.mkdir(exist_ok=True)
-    if not settings.ARCHIVE_INDEX_FILE.exists():
-        settings.ARCHIVE_INDEX_FILE.write_text("[]", encoding="utf-8")
+# ... imports ...
 
-    # Load admins
-    load_admin_ids()
+app = FastAPI(lifespan=lifespan)
 
-    # Init DB loop
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
-    loop.run_until_complete(db.connect())
+# Mount Web App
+app.mount("/webapp", StaticFiles(directory="webapp", html=True), name="webapp")
 
-    application = Application.builder().token(settings.BOT_TOKEN).post_shutdown(post_shutdown).build()
+# CORS
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"], 
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
-    # Jobs
-    job_queue = application.job_queue
-    job_queue.run_repeating(clean_temp_files_job, interval=3600, first=60)
+@app.post("/api/submit-report")
+async def submit_report(
+    department_number: str = Form(...),
+    issue_number: str = Form(...),
+    ticket_number: str = Form(...),
+    date: str = Form(...),
+    region: str = Form(...),
+    items: str = Form(...), # JSON string
+    photos: List[UploadFile] = File(...)
+):
+    try:
+        items_data = json.loads(items)
+        # items_data structure: [{'id': 0, 'description': '...', 'evaluation': '...'}]
+        
+        # Validate count
+        if len(items_data) != len(photos):
+            raise HTTPException(status_code=400, detail="Mismatch between items and photos count")
 
-    # Handlers
-    reports_conv_handler = ConversationHandler(
-        entry_points=[CommandHandler("reports", reports_start_handler)],
-        states={
-            REPORT_ACTION: [MessageHandler(filters.TEXT & ~filters.COMMAND, reports_action_handler)],
-            REPORT_MONTH_INPUT: [MessageHandler(filters.TEXT & ~filters.COMMAND, reports_month_input_handler)],
-            REPORT_MONTH_REGION: [MessageHandler(filters.TEXT & ~filters.COMMAND, reports_month_region_handler)],
-            REPORT_PERIOD_START: [MessageHandler(filters.TEXT & ~filters.COMMAND, reports_period_start_handler)],
-            REPORT_PERIOD_END: [MessageHandler(filters.TEXT & ~filters.COMMAND, reports_period_end_handler)],
-            REPORT_PERIOD_REGION: [MessageHandler(filters.TEXT & ~filters.COMMAND, reports_period_region_handler)],
-        },
-        fallbacks=[
-            CommandHandler("cancel", reports_cancel_handler),
-            CommandHandler("menu", reports_cancel_handler),
-            MessageHandler(filters.Regex("^❌ Отмена$"), reports_cancel_handler)
-        ],
-        allow_reentry=True
-    )
+        # Process photos
+        processed_photos = []
+        settings.TEMP_PHOTOS_DIR.mkdir(parents=True, exist_ok=True)
 
-    from handlers.webapp import webapp_data_handler
+        for i, photo in enumerate(photos):
+            unique_name = generate_unique_filename()
+            original_path = settings.TEMP_PHOTOS_DIR / f"orig_{unique_name}"
+            compressed_path = settings.TEMP_PHOTOS_DIR / unique_name
+            
+            # Save upload
+            with open(original_path, "wb") as buffer:
+                content = await photo.read()
+                buffer.write(content)
+            
+            # Compress
+            await asyncio.to_thread(compress_image, original_path, compressed_path)
+            
+            # Cleanup original
+            if original_path.exists():
+                original_path.unlink()
+                
+            # Match with item data (assuming order is preserved)
+            item_info = items_data[i]
+            processed_photos.append({
+                'photo': str(compressed_path),
+                'description': item_info.get('description', ''),
+                'evaluation': item_info.get('evaluation', '')
+            })
 
-    conv_handler = ConversationHandler(
-        entry_points=[
-            CommandHandler("start", start_handler),
-            MessageHandler(filters.Regex("^📝 Создать \(Текст\)$"), start_handler),
-            MessageHandler(filters.StatusUpdate.WEB_APP_DATA, webapp_data_handler)
-        ],
-        states={
-            DEPARTMENT: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_department)],
-            ISSUE_NUMBER: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_issue_number)],
-            TICKET_NUMBER: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_ticket_number)],
-            DATE: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_date)],
-            REGION: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_region)],
-            PHOTO: [MessageHandler((filters.PHOTO | filters.Document.IMAGE), photo_handler)],
-            DESCRIPTION: [MessageHandler(filters.TEXT & ~filters.COMMAND, description_handler)],
-            EVALUATION: [MessageHandler(filters.TEXT & ~filters.COMMAND, evaluation_handler)],
-            MORE_PHOTO: [MessageHandler(filters.TEXT & ~filters.COMMAND, more_photo_handler)],
-            CONFIRMATION: [MessageHandler(filters.TEXT & ~filters.COMMAND, confirmation_handler)],
-            TESTING: [MessageHandler(filters.TEXT & ~filters.COMMAND, test_choice_handler)],
-        },
-        fallbacks=[CommandHandler("cancel", cancel_handler)],
-        allow_reentry=True
-    )
+        # Prepare data for document
+        data = {
+            'department_number': department_number,
+            'issue_number': issue_number,
+            'ticket_number': ticket_number,
+            'date': date,
+            'region': region,
+            'photo_desc': processed_photos
+        }
 
-    application.add_handler(reports_conv_handler)
-    application.add_handler(conv_handler)
-    
-    application.add_handler(CommandHandler("menu", menu_handler))
-    application.add_handler(CommandHandler("help", help_handler))
-    application.add_handler(CommandHandler("help_admin", help_admin_handler))
-    application.add_handler(CommandHandler("history", history_handler))
-    application.add_handler(CommandHandler("stats", stats_handler))
-    application.add_handler(CommandHandler("add_admin", add_admin_handler))
+        # Generate Document
+        # We need a dummy user_id for filename generation or pass it from frontend?
+        # Let's use a system user_id or just 0
+        user_id = 0 
+        username = "WebUser"
+        
+        filename_path = await create_document_from_data(user_id, username, data)
+        
+        # Send to Admin Group
+        if region in settings.REGION_TOPICS:
+            topic_id = settings.REGION_TOPICS[region]
+            caption = (f"Заключение от п. {department_number}, "
+                       f"билет: {ticket_number}, от {date}")
+            
+            try:
+                await bot_app.bot.send_document(
+                    chat_id=settings.MAIN_GROUP_CHAT_ID,
+                    document=open(filename_path, 'rb'),
+                    caption=caption,
+                    message_thread_id=topic_id
+                )
+            except Exception as e:
+                logger.error(f"Failed to send to group: {e}")
+                
+            # Update Excel & Archive
+            try:
+                await update_excel(data)
+                await archive_document(filename_path, data)
+            except Exception as e:
+                logger.error(f"Post-processing error: {e}")
 
-    logger.info("Bot started.")
-    application.run_polling()
+        # Cleanup
+        if filename_path.exists():
+            filename_path.unlink()
+            
+        for item in processed_photos:
+            path = Path(item['photo'])
+            if path.exists():
+                path.unlink()
+
+        return {"status": "success", "message": "Report submitted successfully"}
+
+    except Exception as e:
+        logger.error(f"Error processing report: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 if __name__ == "__main__":
-    main()
+    uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=True)

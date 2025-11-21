@@ -1,7 +1,11 @@
 python-telegram-bot[job-queue]>=21.9
+python-dotenv
 Pillow
 python-docx
 openpyxl
 aiosqlite
 nest_asyncio
+fastapi
+uvicorn
+python-multipart
 python-dotenv

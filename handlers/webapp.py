@@ -21,7 +21,7 @@ async def webapp_data_handler(update: Update, context: CallbackContext) -> int:
 
     # Save to DB
     # We need to map web_data fields to our DB schema
-    # Web data: department_number, issue_number, ticket_number, date, region, description, evaluation
+    # Web data: department_number, issue_number, ticket_number, date, region, items
     
     # First, save basic info
     db_data = {
@@ -33,14 +33,37 @@ async def webapp_data_handler(update: Update, context: CallbackContext) -> int:
         'photo_desc': [] # Reset photos
     }
     
-    # Add the first item description/evaluation as a pending item or just save it?
-    # Our logic expects photos first, then description.
-    # But here we got description first.
-    # Let's save the description/evaluation in a temporary way or just append it to the first photo when it arrives?
-    # Better approach: Save it in user_data context and apply to the first photo.
+    # Store pending items queue
+    # items is a list of dicts: [{'description': '...', 'evaluation': '...'}, ...]
+    items = web_data.get('items', [])
     
-    context.user_data['pending_desc'] = web_data['description']
-    context.user_data['pending_eval'] = web_data['evaluation']
+    # Backward compatibility check if single item fields exist
+    if not items and 'description' in web_data:
+        items = [{'description': web_data['description'], 'evaluation': web_data['evaluation']}]
+        
+    context.user_data['pending_items'] = items
+    
+    # Also update user settings for persistence
+    await db.update_user_settings(user_id, department=web_data['department_number'], region=web_data['region'])
+    await db.save_user_data(user_id, db_data)
+
+    PHOTO_REQUIREMENTS_MESSAGE = (
+        "Требования к фото:\n"
+        "• Формат JPG/PNG\n"
+        f"• Размер до {settings.MAX_PHOTO_SIZE_MB} МБ\n"
+        "• Минимальное разрешение 800×600"
+    )
+    
+    next_item_desc = items[0]['description'] if items else "предмета"
+
+    await update.message.reply_text(
+        f"✅ Данные из формы получены! (Предметов: {len(items)})\n\n"
+        f"🟡 {format_progress('photo', PROGRESS_STEPS, TOTAL_STEPS)}\n"
+        f"Отправьте фото для: **{next_item_desc}**\n"
+        f"{PHOTO_REQUIREMENTS_MESSAGE}",
+        reply_markup=ReplyKeyboardRemove(),
+        parse_mode='Markdown'
+    )
     
     # Also update user settings for persistence
     await db.update_user_settings(user_id, department=web_data['department_number'], region=web_data['region'])

@@ -279,9 +279,75 @@ async def photo_handler(update: Update, context: CallbackContext) -> int:
         if original_path.exists():
             original_path.unlink()
 
-    data.setdefault('photo_desc', []).append({'photo': str(compressed_path), 'description': '', 'evaluation': ''})
+    # Check for pending items queue from Web App
+    pending_items = context.user_data.get('pending_items', [])
+    
+    description = ''
+    evaluation = ''
+    
+    if pending_items:
+        # Pop the first item
+        current_item = pending_items.pop(0)
+        description = current_item.get('description', '')
+        evaluation = current_item.get('evaluation', '')
+        # Update context
+        context.user_data['pending_items'] = pending_items
+    
+    data.setdefault('photo_desc', []).append({
+        'photo': str(compressed_path), 
+        'description': description, 
+        'evaluation': evaluation
+    })
     await db.save_user_data(user_id, data)
 
+    # If we are in "Web App Mode" (using pending items)
+    if description and evaluation:
+        photo_count = len(data.get('photo_desc', []))
+        
+        # If there are more items in the queue
+        if pending_items:
+            next_item = pending_items[0]
+            next_desc = next_item.get('description', 'следующего предмета')
+            
+            markup = build_keyboard_with_menu([], one_time=True, add_back=True)
+            await update.message.reply_text(
+                f"✅ Фото для '{description}' принято!\n"
+                f"🟡 Осталось предметов: {len(pending_items)}\n\n"
+                f"Отправьте фото для: **{next_desc}**",
+                reply_markup=markup,
+                parse_mode='Markdown'
+            )
+            return PHOTO
+        else:
+            # No more items in queue -> Go to summary check
+            # But we might want to allow adding MORE photos for the LAST item?
+            # For simplicity, let's assume 1 photo per item in this mode, 
+            # OR ask if they want to add more photos for THIS item?
+            # The user asked to "fill everything", implying a stream.
+            # Let's go to confirmation/summary directly to be fast.
+            
+            # Re-show summary
+            photos = data.get('photo_desc', [])
+            total_value = sum(int(item.get('evaluation', 0)) for item in photos if is_digit(str(item.get('evaluation', 0))))
+            summary = (
+                f"Номер подразделения: {data.get('department_number')}\n"
+                f"Номер заключения: {data.get('issue_number')}\n"
+                f"Билет: {data.get('ticket_number')}\n"
+                f"Дата: {data.get('date')}\n"
+                f"Регион: {data.get('region')}\n"
+                "---\n"
+                f"Всего предметов: {len(photos)}\n"
+                f"Сумма: {total_value}"
+            )
+            markup = build_keyboard_with_menu([["✅ Да, всё верно"], ["❌ Нет, отменить"]], one_time=True, add_back=True)
+            await update.message.reply_text(
+                f"✅ Все предметы загружены!\n\n"
+                f"🔍 {format_progress('summary', PROGRESS_STEPS, TOTAL_STEPS)} – проверьте данные:\n\n{summary}\n\nВсё верно?",
+                reply_markup=markup
+            )
+            return CONFIRMATION
+
+    # Legacy/Manual mode
     markup = build_keyboard_with_menu([], one_time=True, add_back=True)
     await update.message.reply_text(
         f"✅ Фото получено! ({format_progress('description', PROGRESS_STEPS, TOTAL_STEPS)})\n✏️ Введите краткое описание предмета:",

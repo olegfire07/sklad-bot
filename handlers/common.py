@@ -58,6 +58,10 @@ async def menu_handler(update: Update, context: CallbackContext) -> None:
     markup = build_main_menu(user_id, admin_ids)
     await update.message.reply_text("📋 Главное меню:", reply_markup=markup)
 
+async def webapp_command_handler(update: Update, context: CallbackContext) -> None:
+    """Shortcut command to show the Web App button."""
+    await menu_handler(update, context)
+
 async def help_handler(update: Update, context: CallbackContext) -> None:
     message = (
         "📚 Инструкция по созданию заключения:\n\n"

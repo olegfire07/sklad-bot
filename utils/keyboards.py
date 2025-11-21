@@ -22,8 +22,16 @@ def ensure_back_button(rows: List[List[str]]) -> List[List[str]]:
              new_rows.append([BACK_BUTTON_LABEL])
     return new_rows
 
-def build_keyboard(rows: List[List[str]], one_time: bool = False) -> ReplyKeyboardMarkup:
-    button_rows = [[KeyboardButton(text=label) for label in row] for row in rows]
+def build_keyboard(rows: List[List[any]], one_time: bool = False) -> ReplyKeyboardMarkup:
+    button_rows = []
+    for row in rows:
+        new_row = []
+        for item in row:
+            if isinstance(item, KeyboardButton):
+                new_row.append(item)
+            else:
+                new_row.append(KeyboardButton(text=str(item)))
+        button_rows.append(new_row)
     return ReplyKeyboardMarkup(button_rows, one_time_keyboard=one_time, resize_keyboard=False)
 
 def build_keyboard_with_menu(rows: List[List[str]], one_time: bool = False, add_back: bool = False) -> ReplyKeyboardMarkup:
@@ -45,8 +53,9 @@ from telegram import ReplyKeyboardMarkup, KeyboardButton, WebAppInfo
 # ... (existing constants)
 
 def build_main_menu(user_id: int, admin_ids: List[int] = None) -> ReplyKeyboardMarkup:
-    # Replace this URL with your actual GitHub Pages URL after deployment
-    WEBAPP_URL = "https://oleg-project-sklad.github.io/webapp/" 
+    # Use environment variable or default to a placeholder
+    import os
+    WEBAPP_URL = os.getenv("WEBAPP_URL", "https://YOUR-APP-NAME.onrender.com/webapp/")
     
     rows = [
         [KeyboardButton("📝 Форма (Web App)", web_app=WebAppInfo(url=WEBAPP_URL))],
