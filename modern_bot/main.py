@@ -5,7 +5,7 @@ from modern_bot.config import load_bot_token
 from modern_bot.database.db import init_db, close_db
 from modern_bot.utils.files import clean_temp_files
 from modern_bot.handlers.common import process_network_recovery
-from modern_bot.handlers.start import start_handler, photo_upload_handler
+from modern_bot.handlers.commands import start_handler, help_handler, old_mode_handler
 from modern_bot.handlers.conversation import get_conversation_handler
 from modern_bot.handlers.admin import (
     add_admin_handler, broadcast_handler, help_admin_handler, load_admin_ids
@@ -15,6 +15,8 @@ from modern_bot.handlers.reports import (
     history_handler, download_month_handler
 )
 from modern_bot.utils.logger import setup_logger
+
+from modern_bot.api import start_api_server
 
 logger = setup_logger()
 
@@ -27,13 +29,19 @@ async def network_recovery_job(context):
 async def error_handler(update, context):
     logger.error(f"Update {update} caused error {context.error}", exc_info=context.error)
 
+async def post_init(application: Application):
+    """
+    Post initialization hook to start the API server.
+    """
+    await start_api_server(application.bot)
+
 def main():
     # Load config
     token = load_bot_token()
     load_admin_ids()
 
     # Build Application
-    application = Application.builder().token(token).post_shutdown(close_db).build()
+    application = Application.builder().token(token).post_init(post_init).post_shutdown(close_db).build()
 
     # Init DB
     loop = asyncio.get_event_loop()
@@ -46,6 +54,11 @@ def main():
 
     # Handlers
     application.add_handler(CommandHandler("start", start_handler))
+    application.add_handler(CommandHandler("help", help_handler))
+    
+    # Menu Buttons Handlers
+    application.add_handler(MessageHandler(filters.Regex("^ℹ️ Помощь$"), help_handler))
+    application.add_handler(MessageHandler(filters.Regex("^📂 Старый режим$"), old_mode_handler))
     
     # Legacy Conversation
     application.add_handler(get_conversation_handler())

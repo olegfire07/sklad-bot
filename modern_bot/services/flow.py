@@ -32,12 +32,20 @@ async def finalize_conclusion(bot: Bot, user_id: int, user_name: str, data: Dict
             
             try:
                 # Send to the specific topic if found, otherwise to the main group (general topic)
+                # Format: Заключение от п. 385, билет: 03850006392, от 22.11.2025
+                caption = (
+                    f"📄 Заключение от п. {data.get('department_number')}, "
+                    f"билет: {data.get('ticket_number')}, "
+                    f"от {data.get('date')}\n"
+                    f"🌍 Регион: {region}"
+                )
+                
                 await send_document_from_path(
                     bot, 
                     MAIN_GROUP_CHAT_ID, 
                     path, 
                     message_thread_id=topic_id,
-                    caption=f"📄 Заключение от {user_name}\n🌍 Регион: {region}"
+                    caption=caption
                 )
             except Exception as e:
                 logger.error(f"Failed to send to group: {e}")

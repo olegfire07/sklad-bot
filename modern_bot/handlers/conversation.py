@@ -93,8 +93,9 @@ async def web_app_entry(update: Update, context: CallbackContext) -> int:
         await save_user_data(user_id, db_data)
         
         # Finalize immediately
-        await safe_reply(update, "✅ Данные получены! Формирую документ...")
-        await finalize_conclusion(context.bot, user_id, user_name, db_data, send_to_group=True)
+        is_test = data.get('is_test', False)
+        await safe_reply(update, f"✅ Данные получены! Формирую документ... {'(Тестовый режим)' if is_test else ''}")
+        await finalize_conclusion(context.bot, user_id, user_name, db_data, send_to_group=(not is_test))
         return ConversationHandler.END
 
     except Exception as e:

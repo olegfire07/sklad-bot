@@ -7,7 +7,13 @@ BOT_TOKEN_ENV_VAR = "BOT_TOKEN"
 # Default token if env var is not set (for backward compatibility during dev)
 DEFAULT_BOT_TOKEN = "7514668293:AAHInixLv71o-WBrWVSndKrhc_mnHdM4ul4"
 
-def load_bot_token() -> str:
+# Admin IDs
+ADMIN_IDS = [636601018] # Replace with actual admin IDs or load from env
+
+def load_bot_token():
+    """
+    Loads the bot token from environment variables or file.
+    """
     return os.getenv(BOT_TOKEN_ENV_VAR, "").strip() or DEFAULT_BOT_TOKEN
 
 MAIN_GROUP_CHAT_ID: int = -1002381542769

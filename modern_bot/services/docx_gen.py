@@ -79,10 +79,21 @@ def populate_table_with_data(doc: Document, data: Dict[str, Any]) -> None:
             logger.error(f"Error populating table: {e}")
     add_borders_to_table(table)
 
-async def create_document(user_id: int, username: str = "") -> Path:
-    data = await load_user_data(user_id)
-    if not data:
-        raise ValueError("No user data found.")
+async def create_document(user_id: int, user_name: str, db_data_override: Dict[str, Any] = None) -> Path:
+    """
+    Generates the DOCX document.
+    """
+    try:
+        if db_data_override:
+            data = db_data_override
+        else:
+            data = await load_user_data(user_id) # Assuming load_user_data is the correct function name
+            
+        if not data:
+            raise ValueError("No data found for user")
+    except Exception as e:
+        raise RuntimeError(f"Error loading user data: {e}") from e
+
     if not TEMPLATE_PATH.exists():
         raise FileNotFoundError(f"Template '{TEMPLATE_PATH}' not found.")
 
