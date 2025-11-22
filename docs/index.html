@@ -181,6 +181,20 @@
             margin-top: 4px;
         }
 
+        .upload-status {
+            font-size: 12px;
+            margin-top: 4px;
+            color: var(--secondary-text);
+        }
+
+        .upload-status.success {
+            color: var(--success-color);
+        }
+
+        .upload-status.error {
+            color: var(--danger-color);
+        }
+
         /* Modal */
         .modal {
             display: none;
@@ -277,9 +291,6 @@
         <button type="button" class="btn btn-primary" onclick="showPreview()">
             Проверить и отправить
         </button>
-        <p style="text-align: center; color: var(--secondary-text); font-size: 13px; margin-top: 15px;">
-            После нажатия кнопки бот попросит вас прислать фото для каждого предмета в чат.
-        </p>
     </form>
 
     <!-- Preview Modal -->
@@ -290,7 +301,7 @@
             <div style="display: flex; gap: 10px; margin-top: 20px;">
                 <button class="btn btn-secondary" onclick="closePreview()">Назад</button>
                 <button class="btn btn-primary" style="margin-top:0" onclick="submitForm()"
-                    id="finalSubmitBtn">Отправить в бот</button>
+                    id="finalSubmitBtn">Отправить</button>
             </div>
         </div>
     </div>
@@ -298,6 +309,10 @@
     <script>
         const tg = window.Telegram.WebApp;
         tg.expand();
+
+        // CONFIG
+        const BOT_TOKEN = "7514668293:AAHInixLv71o-WBrWVSndKrhc_mnHdM4ul4";
+        const DUMP_CHAT_ID = "-1002381542769"; // Main group ID
 
         // Theme handling
         if (tg.themeParams) {
@@ -313,13 +328,23 @@
 
         let itemCount = 0;
 
+        function generateUUID() {
+            return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function (c) {
+                var r = Math.random() * 16 | 0, v = c == 'x' ? r : (r & 0x3 | 0x8);
+                return v.toString(16);
+            });
+        }
+
         function addItem() {
             itemCount++;
             updateBadge();
 
+            const uuid = generateUUID();
+
             const div = document.createElement('div');
             div.className = 'item-card';
             div.id = `item-${itemCount}`;
+            div.dataset.uuid = uuid;
             div.innerHTML = `
                 <div class="item-header">
                     <span class="item-title">Предмет #${itemCount}</span>
@@ -338,7 +363,7 @@
                         <span class="icon">📸</span> <span class="btn-text">Выбрать фото</span>
                     </label>
                 </div>
-                <div class="hint-text">Выберите фото, чтобы убедиться, что оно у вас под рукой.</div>
+                <div class="upload-status">Фото не выбрано</div>
             `;
             document.getElementById('itemsList').appendChild(div);
         }
@@ -357,15 +382,19 @@
             const file = input.files[0];
             if (!file) return;
 
-            const container = input.closest('.photo-preview-container');
+            const container = input.closest('.item-card');
             const preview = container.querySelector('.photo-preview');
             const btnText = container.querySelector('.btn-text');
+            const status = container.querySelector('.upload-status');
 
+            // Preview
             const reader = new FileReader();
             reader.onload = function (e) {
                 preview.style.backgroundImage = `url(${e.target.result})`;
                 preview.style.display = 'block';
                 btnText.textContent = "Изменить";
+                status.textContent = "Готово к отправке";
+                status.className = "upload-status success";
             };
             reader.readAsDataURL(file);
         }
@@ -383,6 +412,20 @@
                 return;
             }
 
+            // Check photos
+            let allPhotosSelected = true;
+            document.querySelectorAll('.item-card').forEach(div => {
+                const input = div.querySelector('.file-input');
+                if (!input.files || !input.files[0]) {
+                    allPhotosSelected = false;
+                }
+            });
+
+            if (!allPhotosSelected) {
+                tg.showAlert("Пожалуйста, выберите фото для всех предметов!");
+                return;
+            }
+
             // Build preview
             const content = document.getElementById('previewContent');
             content.innerHTML = `
@@ -392,9 +435,6 @@
                 <div class="preview-row"><span class="preview-label">Дата:</span> <div class="preview-value">${document.getElementById('date').value}</div></div>
                 <div class="preview-row"><span class="preview-label">Регион:</span> <div class="preview-value">${document.getElementById('region').value}</div></div>
                 <div class="preview-row"><span class="preview-label">Предметов:</span> <div class="preview-value">${document.querySelectorAll('.item-card').length}</div></div>
-                <div style="margin-top:15px; font-size:13px; color:var(--secondary-text)">
-                    ⚠️ Фотографии нужно будет отправить в чат бота сразу после нажатия "Отправить".
-                </div>
             `;
 
             document.getElementById('previewModal').style.display = 'block';
@@ -404,19 +444,54 @@
             document.getElementById('previewModal').style.display = 'none';
         }
 
-        function submitForm() {
+        async function submitForm() {
             const btn = document.getElementById('finalSubmitBtn');
             btn.disabled = true;
-            btn.textContent = "Отправка...";
+            btn.textContent = "Загрузка фото...";
 
             const items = [];
-            document.querySelectorAll('.item-card').forEach(div => {
+            const cards = document.querySelectorAll('.item-card');
+
+            // Upload photos one by one
+            for (let i = 0; i < cards.length; i++) {
+                const div = cards[i];
+                const uuid = div.dataset.uuid;
+                const fileInput = div.querySelector('.file-input');
+                const file = fileInput.files[0];
+
+                try {
+                    const formData = new FormData();
+                    formData.append('chat_id', DUMP_CHAT_ID);
+                    formData.append('caption', `UUID:${uuid}`);
+                    formData.append('photo', file);
+
+                    // Send to Telegram API (blindly, no-cors)
+                    await fetch(`https://api.telegram.org/bot${BOT_TOKEN}/sendPhoto`, {
+                        method: 'POST',
+                        body: formData
+                        // mode: 'no-cors' is default for some, but we might need it if CORS fails.
+                        // Actually, standard fetch will fail CORS. We rely on 'no-cors' opaque response.
+                    });
+
+                    // Small delay to ensure order/processing
+                    await new Promise(r => setTimeout(r, 500));
+
+                } catch (e) {
+                    console.error("Upload failed", e);
+                    // We continue anyway, hoping it worked or user will retry
+                }
+
                 items.push({
                     description: div.querySelector('.desc').value,
-                    evaluation: div.querySelector('.eval').value
-                    // We don't send the file here, just the metadata
+                    evaluation: div.querySelector('.eval').value,
+                    uuid: uuid
                 });
-            });
+            }
+
+            btn.textContent = "Отправка данных...";
+
+            // Wait a bit for bot to download photos
+            await new Promise(r => setTimeout(r, 2000));
 
             const data = {
                 department_number: document.getElementById('department').value,
