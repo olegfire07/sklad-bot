@@ -455,11 +455,11 @@
         const tg = window.Telegram.WebApp;
 
         // --- CONFIGURATION ---
+        // WARNING: These are default values for local/demo use.
+        // For production, consider injecting these via environment variables or a build step.
         const APP_CONFIG = {
-            // Default URL for standalone mode. 
-            // CHANGE THIS if your ngrok tunnel URL changes.
-            DEFAULT_BOT_URL: "https://64ee6bd67fc0.ngrok-free.app",
-            DEFAULT_IMGBB_KEY: "c8574310f13ff081e6ed7e3c9f963f9f"
+            DEFAULT_BOT_URL: window.APP_DEFAULT_BOT_URL || "https://64ee6bd67fc0.ngrok-free.app",
+            DEFAULT_IMGBB_KEY: window.APP_DEFAULT_IMGBB_KEY || "c8574310f13ff081e6ed7e3c9f963f9f"
         };
 
         // Initialize
@@ -475,6 +475,11 @@
         let titleClicks = 0;
         let titleTimer;
 
+        function populateSettingsInputs() {
+            document.getElementById('apiKeyInput').value = imgbbKey;
+            document.getElementById('botUrlInput').value = botUrl;
+        }
+
         function handleTitleClick() {
             titleClicks++;
             clearTimeout(titleTimer);
@@ -483,10 +488,8 @@
             }, 1000);
 
             if (titleClicks >= 5) {
+                populateSettingsInputs();
                 document.getElementById('settingsModal').style.display = 'block';
-                // Populate settings inputs when modal opens
-                document.getElementById('apiKeyInput').value = imgbbKey;
-                document.getElementById('botUrlInput').value = botUrl;
                 titleClicks = 0;
             }
         }
@@ -503,7 +506,7 @@
                 imgbbKey = APP_CONFIG.DEFAULT_IMGBB_KEY;
             }
 
-            if (url !== undefined) {
+            if (url) {
                 // Remove trailing slash
                 const cleanUrl = url.replace(/\/$/, "");
                 localStorage.setItem('bot_url', cleanUrl);
@@ -731,46 +734,58 @@
 
             btn.textContent = "Отправка данных...";
 
-            const isTest = document.getElementById('mode-test').checked;
+            try {
+                const isTest = document.getElementById('mode-test').checked;
 
-            const data = {
-                department_number: document.getElementById('department').value,
-                issue_number: document.getElementById('issue').value,
-                ticket_number: document.getElementById('ticket').value,
-                date: document.getElementById('date').value.split('-').reverse().join('.'),
-                region: document.getElementById('region').value,
-                items: items,
-                is_test: isTest
-            };
+                const data = {
+                    department_number: document.getElementById('department').value,
+                    issue_number: document.getElementById('issue').value,
+                    ticket_number: document.getElementById('ticket').value,
+                    date: document.getElementById('date').value.split('-').reverse().join('.'),
+                    region: document.getElementById('region').value,
+                    items: items,
+                    is_test: isTest
+                };
 
-            // Check if running in Telegram
-            // We check if initDataUnsafe is present and has user info
-            if (tg.initDataUnsafe && tg.initDataUnsafe.user) {
-                tg.sendData(JSON.stringify(data));
-            } else {
-                // Standalone Mode
-                if (!botUrl) {
-                    document.getElementById('settingsModal').style.display = 'block';
-                    tg.showAlert("Для работы в браузере нужно указать URL бота в настройках (например, ngrok адрес).");
-                    btn.disabled = false;
-                    btn.textContent = "Отправить";
-                    return;
-                }
+                // Check if running in Telegram
+                // We check if initDataUnsafe is present and has user info
+                if (tg.initDataUnsafe && tg.initDataUnsafe.user) {
+                    tg.sendData(JSON.stringify(data));
+                } else {
+                    // Standalone Mode
+                    if (!botUrl) {
+                        populateSettingsInputs();
+                        document.getElementById('settingsModal').style.display = 'block';
+                        tg.showAlert("Для работы в браузере нужно указать URL бота в настройках (например, ngrok адрес).");
+                        btn.disabled = false;
+                        btn.textContent = "Отправить";
+                        return;
+                    }
 
-                try {
-                    btn.textContent = "Генерация документа...";
+                    btn.textContent = "Подключение к серверу...";
+
+                    // Add timeout to fetch
+                    const controller = new AbortController();
+                    const timeoutId = setTimeout(() => controller.abort(), 30000); // 30s timeout
+
                     const response = await fetch(botUrl + '/api/generate', {
                         method: 'POST',
                         headers: {
                             'Content-Type': 'application/json'
                         },
-                        body: JSON.stringify(data)
+                        body: JSON.stringify(data),
+                        signal: controller.signal
                     });
 
+                    clearTimeout(timeoutId);
+
                     if (!response.ok) {
-                        const err = await response.json();
+                        btn.textContent = "Ошибка сервера...";
+                        const err = await response.json().catch(() => ({}));
                         throw new Error(err.error || `Server Error: ${response.status}`);
                     }
+
+                    btn.textContent = "Скачивание файла...";
 
                     // Download File
                     const blob = await response.blob();
@@ -785,14 +800,18 @@
 
                     alert("✅ Документ готов и скачан!");
                     closePreview();
-
-                } catch (e) {
-                    console.error("API Error", e);
-                    alert(`Ошибка: ${e.message}`);
-                } finally {
                     btn.disabled = false;
                     btn.textContent = "Отправить";
                 }
+            } catch (e) {
+                console.error("Submission Error", e);
+                if (e.name === 'AbortError') {
+                    alert("Ошибка: Превышено время ожидания (30с). Проверьте интернет или URL бота.");
+                } else {
+                    alert(`Ошибка при отправке: ${e.message}`);
+                }
+                btn.disabled = false;
+                btn.textContent = "Отправить";
             }
         }
 
