@@ -2,16 +2,16 @@ import asyncio
 import random
 import string
 import logging
+from typing import Dict, Any
 from pathlib import Path
 from datetime import datetime
-from typing import Dict, Any
 from docx import Document
 from docx.shared import Inches
 from docx.oxml.ns import qn
 from docx.oxml import OxmlElement
-from config.settings import settings
-from database.db import db
-from utils.helpers import sanitize_filename
+from modern_bot.config import TEMPLATE_PATH, DOCS_DIR
+from modern_bot.utils.files import sanitize_filename
+from modern_bot.database.db import load_user_data
 
 logger = logging.getLogger(__name__)
 
@@ -80,14 +80,13 @@ def populate_table_with_data(doc: Document, data: Dict[str, Any]) -> None:
     add_borders_to_table(table)
 
 async def create_document(user_id: int, username: str = "") -> Path:
-    data = await db.load_user_data(user_id)
+    data = await load_user_data(user_id)
     if not data:
-        raise ValueError("User data not found.")
-    if not settings.TEMPLATE_PATH.exists():
-        logger.error(f"Template not found: {settings.TEMPLATE_PATH}")
-        raise FileNotFoundError(f"Template '{settings.TEMPLATE_PATH}' not found.")
+        raise ValueError("No user data found.")
+    if not TEMPLATE_PATH.exists():
+        raise FileNotFoundError(f"Template '{TEMPLATE_PATH}' not found.")
 
-    settings.DOCS_DIR.mkdir(parents=True, exist_ok=True)
+    DOCS_DIR.mkdir(parents=True, exist_ok=True)
     selected_date = data.get('date') or datetime.now().strftime('%d.%m.%Y')
     timestamp = datetime.now().strftime('%H-%M-%S')
     placeholders = {
@@ -106,7 +105,7 @@ async def create_document(user_id: int, username: str = "") -> Path:
     safe_filename_str = sanitize_filename(base_filename)
     if not safe_filename_str:
         safe_filename_str = f"Заключение_{timestamp}.docx"
-    filepath = settings.DOCS_DIR / safe_filename_str
+    filepath = DOCS_DIR / safe_filename_str
 
     suffix = Path(safe_filename_str).suffix or ".docx"
     stem = Path(safe_filename_str).stem or "Заключение"
@@ -115,11 +114,12 @@ async def create_document(user_id: int, username: str = "") -> Path:
         candidate_name = sanitize_filename(f"{stem}_{unique_suffix}{suffix}")
         if not candidate_name:
             candidate_name = f"Заключение_{timestamp}_{unique_suffix}.docx"
-        filepath = settings.DOCS_DIR / candidate_name
+        filepath = DOCS_DIR / candidate_name
+        safe_filename_str = candidate_name
 
     def _build_document():
         try:
-            doc = Document(settings.TEMPLATE_PATH)
+            doc = Document(TEMPLATE_PATH)
             if doc.paragraphs:
                 doc.paragraphs[0].insert_paragraph_before(filepath.stem)
             else:
